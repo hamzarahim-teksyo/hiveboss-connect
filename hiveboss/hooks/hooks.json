@@ -1,0 +1,182 @@
+{
+  "description": "HiveBoss: the room brief on a session's first prompt (through the plugin's own MCP connection; the prompt itself is not sent), the repo name at session start, a once-per-session publish offer, the once-per-session \"Run /hiveboss\" nudge shown to the person when HiveBoss says the session is none of their agents, and (when HiveBoss has the diary on) a once-per-session offer to write a diary, which only offers and never sends. Prompt context is the separate hiveboss-context plugin. With canon parity on (HiveBoss Playbook), it also delivers the Hive Playbook floor at session start from a local pack cache, and applies the cached deny rules and path reminders before tool calls, locally, with no network call (Claude Code only: Codex has no plugin pre-tool hook here, a listed exception). In an agent's home it also reminds the agent to update STATE.md when the conversation is compacted (PreCompact marks it, SessionStart after the compaction says it).",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh",
+            "args": [
+              "session-start"
+            ],
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/playbook-hook.sh",
+            "args": [
+              "session-start"
+            ],
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh",
+            "args": [
+              "after-compact"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:hiveboss:hiveboss",
+            "tool": "hook_context",
+            "input": {
+              "cwd": "${cwd}",
+              "session_id": "${session_id}"
+            },
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/playbook-hook.sh",
+            "args": [
+              "prompt"
+            ],
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh",
+            "args": [
+              "busy"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/playbook-hook.sh",
+            "args": [
+              "deny"
+            ],
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/playbook-hook.sh",
+            "args": [
+              "paths"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh",
+            "args": [
+              "mark-changed"
+            ],
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__plugin_hiveboss_hiveboss__publish_page",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh",
+            "args": [
+              "mark-published"
+            ],
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__plugin_hiveboss_hiveboss__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/playbook-hook.sh",
+            "args": [
+              "capture"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh",
+            "args": [
+              "stop"
+            ],
+            "timeout": 5
+          },
+          {
+            "type": "mcp_tool",
+            "server": "plugin:hiveboss:hiveboss",
+            "tool": "hook_stop",
+            "input": {
+              "session_id": "${session_id}"
+            },
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh",
+            "args": [
+              "pre-compact"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

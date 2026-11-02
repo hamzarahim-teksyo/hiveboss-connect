@@ -1,0 +1,20 @@
+{
+  "name": "hiveboss",
+  "description": "HiveBoss Connect for Claude Code: publish your work into your team's HiveBoss room and read what the team already decided.",
+  "owner": {
+    "name": "HiveBoss",
+    "url": "https://hiveboss.ai"
+  },
+  "plugins": [
+    {
+      "name": "hiveboss",
+      "source": "./hiveboss",
+      "description": "HiveBoss Connect: publish pages, ask the HiveMind, make reels, send HiveMail and read replies from Claude Code."
+    },
+    {
+      "name": "hiveboss-context",
+      "source": "./hiveboss-context",
+      "description": "Optional for HiveBoss Connect: adds cited HiveMind context to your prompts in Claude Code. Needs the hiveboss plugin."
+    }
+  ]
+}

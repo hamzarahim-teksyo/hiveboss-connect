@@ -1,0 +1,22 @@
+{
+  "description": "HiveBoss context on prompts: sends the prompt, working directory and session id (so HiveBoss reads as the agent this session acts as) to the hiveboss plugin's own MCP server (no second credential) and adds what comes back. Gives up after 2 seconds and adds nothing.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:hiveboss:hiveboss",
+            "tool": "hook_context",
+            "input": {
+              "prompt": "${prompt}",
+              "cwd": "${cwd}",
+              "session_id": "${session_id}"
+            },
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  }
+}

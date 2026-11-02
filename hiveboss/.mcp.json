@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "hiveboss": {
+      "type": "http",
+      "url": "${user_config.mcp_url}"
+    },
+    "knowledge": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/knowledge/launch.mjs"
+      ],
+      "env": {
+        "HIVEBOSS_WAKE_ORIGIN": "${HIVEBOSS_WAKE_ORIGIN:-}",
+        "HIVEBOSS_WAKE_ID": "${HIVEBOSS_WAKE_ID:-}",
+        "HIVEBOSS_WAKE_SENDER": "${HIVEBOSS_WAKE_SENDER:-}",
+        "HIVEBOSS_AGENT_HOME": "${HIVEBOSS_AGENT_HOME:-}"
+      }
+    }
+  }
+}
