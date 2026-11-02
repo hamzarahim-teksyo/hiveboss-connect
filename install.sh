@@ -15,7 +15,9 @@
 #
 # Claude Code:
 #   1. claude plugin marketplace add hiveboss-ai/hiveboss-connect
-#      (on a re-run, when it is already added: claude plugin marketplace update hiveboss)
+#      (on a re-run, when it is already added: claude plugin marketplace update hiveboss; one still reading the
+#      old Buzzy-Media-LLC/hiveboss-connect is removed and added again from hiveboss-ai/hiveboss-connect, unless
+#      --marketplace or HIVEBOSS_MARKETPLACE names a source)
 #   2. claude plugin install hiveboss@hiveboss --scope user
 #      claude plugin configure hiveboss@hiveboss --values-stdin   ({"mcp_url": "$MCP_URL"}:
 #      the plugin's userConfig option, saved in Claude Code's settings and read back)
@@ -40,8 +42,9 @@
 #   3. opencode mcp auth hiveboss   (opens HiveBoss to sign in or sign up)
 #
 # Listener (by default; --no-listener leaves it out): writes the HiveBoss listener to
-# ~/.hiveboss/listener (its files, and config.json holding $MCP_URL; the folder
-# mode 700, the files mode 600) and a hiveboss-listen launcher to ~/.local/bin.
+# ~/.hiveboss/listener (its files, and config.json holding $MCP_URL, every other setting in it kept; the folder
+# mode 700, the files mode 600) and a hiveboss-listen launcher to ~/.local/bin. A listener already running is
+# restarted when its files changed, so a re-run always loads the new version.
 # It wakes your agent's own session when someone mentions the agent in a room:
 # it keeps one poll open, which HiveBoss answers within a second or two of a
 # mention. A run gets a spend limit when the agent has a daily cost cap in
@@ -61,8 +64,8 @@
 # the CLI or the listener in with a code, in the person's own terminal.
 #
 # On a computer already set up (connect-simple SAC1, SAC10): the hiveboss
-# CLI's sign-in in ~/.hiveboss/cli, for this same MCP URL, means HiveBoss already
-# works here. Each tool's configuration and skill files are still written (they are
+# CLI's sign-in in ~/.hiveboss/cli, for this same MCP URL, that HiveBoss still takes, means HiveBoss already
+# works here (one that HiveBoss refuses, after a Disconnect, means a first-time setup). Each tool's configuration and skill files are still written (they are
 # idempotent, so a tool installed since, or a changed file, is picked up), but no
 # tool is signed in again and nobody is signed out; the CLI and the listener are
 # updated and `hiveboss setup` opens its menu (add another agent, change one, nothing).
@@ -109,6 +112,8 @@ hiveboss_install() {
 	set -eu
 
 	DEFAULT_MARKETPLACE="hiveboss-ai/hiveboss-connect"
+	# Where the plugin lived before it moved to $DEFAULT_MARKETPLACE: a re-run moves an install still reading it.
+	OLD_MARKETPLACE="Buzzy-Media-LLC/hiveboss-connect"
 	MARKETPLACE_NAME="hiveboss"
 	PLUGIN="hiveboss"
 	CONTEXT_PLUGIN="hiveboss-context"
@@ -245,23 +250,13 @@ hiveboss_install() {
 	already=""
 	if [ -f "$CLI_DIR/credential.json" ] && [ "$login" = "yes" ]; then
 		saved_url=$(sed -n 's/.*"mcpUrl"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CLI_DIR/credential.json" 2>/dev/null | head -n 1)
-		if [ "$saved_url" = "$MCP_URL" ]; then
-			already="yes"
-			say "HiveBoss is already set up on this computer: updating each tool's HiveBoss files, the hiveboss CLI and the listener (nobody is signed in again), then your options."
-		fi
-	fi
-
-	# A re-run never turns context on prompts back on by itself: unless --context-hook or --no-context-hook says
-	# otherwise, a computer already set up keeps the context plugin as the person left it.
-	if [ "$context_hook" = "default" ]; then
-		if [ -n "$already" ]; then context_hook="keep"; else context_hook="true"; fi
+		[ "$saved_url" != "$MCP_URL" ] || already="yes"
 	fi
 
 	tools=""
 	[ -z "$want_claude" ] || tools="Claude Code"
 	[ -z "$want_codex" ] || tools="${tools:+$tools, }Codex"
 	[ -z "$want_opencode" ] || tools="${tools:+$tools, }OpenCode"
-	[ -n "$already" ] || say "HiveBoss Connect: setting up $tools, connecting to $MCP_URL"
 
 	# The CLI first: with a terminal, `hiveboss setup` signs every tool in at the
 	# end under one approval, so each tool's own sign-in step waits for it.
@@ -277,6 +272,29 @@ hiveboss_install() {
 	status=$?
 	set -e
 	[ "$status" -eq 0 ] || failed="${failed:+$failed and }the hiveboss CLI"
+
+	# M2 (connect lifecycle review 2026-11-02): a saved sign-in is "already set up" only while HiveBoss still takes it.
+	# One refresh by the CLI just installed: HiveBoss refused it (a Disconnect on the web) means signed out, so the
+	# stale agents are moved aside (hiveboss check-sign-in does that) and this is a first-time setup. HiveBoss not
+	# answering changes nothing.
+	if [ -n "$already" ] && [ -f "$CLI_DIR/hiveboss.mjs" ]; then
+		set +e
+		node "$CLI_DIR/hiveboss.mjs" check-sign-in </dev/null >/dev/null 2>&1
+		signin_status=$?
+		set -e
+		if [ "$signin_status" -eq 3 ]; then
+			already=""
+			say "This computer was disconnected in HiveBoss, so it is set up again from the start."
+		fi
+	fi
+	[ -z "$already" ] || say "HiveBoss is already set up on this computer: updating each tool's HiveBoss files, the hiveboss CLI and the listener (nobody is signed in again), then your options."
+
+	# A re-run never turns context on prompts back on by itself: unless --context-hook or --no-context-hook says
+	# otherwise, a computer already set up keeps the context plugin as the person left it.
+	if [ "$context_hook" = "default" ]; then
+		if [ -n "$already" ]; then context_hook="keep"; else context_hook="true"; fi
+	fi
+	[ -n "$already" ] || say "HiveBoss Connect: setting up $tools, connecting to $MCP_URL"
 	if [ "$login" = "yes" ] && [ "$status" -eq 0 ] && [ -f "$CLI_DIR/hiveboss.mjs" ] && [ -n "$setup_later" ]; then
 		login="setup"
 	elif [ "$login" = "yes" ] && [ "$status" -eq 0 ] && [ -f "$CLI_DIR/hiveboss.mjs" ] && (exec </dev/tty) 2>/dev/null &&
@@ -434,7 +452,25 @@ install_claude() {
 	say "Claude Code"
 	# A re-run finds the marketplace already added (perhaps from an older source
 	# that GitHub now redirects here): it is updated, never added twice.
-	if claude_marketplace_present "$MARKETPLACE_NAME"; then
+	context_before=""
+	moved_marketplace=""
+	if claude_marketplace_present "$MARKETPLACE_NAME" && [ -z "${HIVEBOSS_MARKETPLACE:-}" ] && [ "$marketplace" = "$DEFAULT_MARKETPLACE" ] &&
+		claude_marketplace_old "$MARKETPLACE_NAME"; then
+		# Plugin source switch (connect lifecycle review 2026-11-02): an install from before the move still reads the
+		# old private repository. It is moved to $DEFAULT_MARKETPLACE; a marketplace pointed anywhere else is never touched.
+		context_before=$(context_plugin_state "$CONTEXT_PLUGIN@$MARKETPLACE_NAME" 2>/dev/null) || context_before=""
+		say "1/3 Moving the HiveBoss Connect plugin marketplace '$MARKETPLACE_NAME' from $OLD_MARKETPLACE to $DEFAULT_MARKETPLACE"
+		if ! out=$(claude plugin marketplace remove "$MARKETPLACE_NAME" </dev/null 2>&1); then
+			[ -z "$out" ] || say "$out" >&2
+			say "Note: Claude Code could not remove the old '$MARKETPLACE_NAME' marketplace; continuing with it."
+		elif claude_tolerating_already "the '$MARKETPLACE_NAME' marketplace is already added" plugin marketplace add "$DEFAULT_MARKETPLACE"; then
+			moved_marketplace="yes"
+		else
+			# Never left with no marketplace: the old source goes back.
+			say "Note: Claude Code could not add $DEFAULT_MARKETPLACE; the old marketplace is put back."
+			claude_tolerating_already "the '$MARKETPLACE_NAME' marketplace is already added" plugin marketplace add "$OLD_MARKETPLACE" || return 1
+		fi
+	elif claude_marketplace_present "$MARKETPLACE_NAME"; then
 		say "1/3 The HiveBoss Connect plugin marketplace '$MARKETPLACE_NAME' is already added; updating it"
 		if ! out=$(claude plugin marketplace update "$MARKETPLACE_NAME" </dev/null 2>&1); then
 			[ -z "$out" ] || say "$out" >&2
@@ -464,6 +500,11 @@ install_claude() {
 	# URL survives plugin updates and needs no environment variable. A re-run first
 	# updates an older copy of the plugin that has no such option.
 	claude plugin update "$PLUGIN@$MARKETPLACE_NAME" --scope user </dev/null >/dev/null 2>&1 || true
+	# A marketplace moved above may have taken the context plugin with it: it comes back as the person had it.
+	if [ -n "$moved_marketplace" ] && [ "$context_hook" = "keep" ] && [ "$context_before" = "enabled" ]; then
+		claude_tolerating_already "$CONTEXT_PLUGIN@$MARKETPLACE_NAME is already installed" plugin install "$CONTEXT_PLUGIN@$MARKETPLACE_NAME" --scope user
+		claude plugin enable "$CONTEXT_PLUGIN@$MARKETPLACE_NAME" </dev/null >/dev/null 2>&1 || true
+	fi
 	detail "    Pointing the plugin at $MCP_URL"
 	claude_set_mcp_url
 	detail "    Writing the /hiveboss setup skill to $CLAUDE_SKILL_DIR/SKILL.md"
@@ -740,12 +781,14 @@ install_listener() {
 	umask 077
 	mkdir -p "$LISTENER_DIR/adapters" "$LISTENER_DIR/agents"
 	chmod 700 "$LISTENER_DIR" "$LISTENER_DIR/adapters" "$LISTENER_DIR/agents"
+	# M4 (connect lifecycle review 2026-11-02): the listener's files before and after, to restart it when they changed.
+	files_before=$(listener_files_sum)
 	listener_files_write "$LISTENER_DIR"
 	# connect-simple SAC1: each file matches the SHA-256 this script was generated with.
 	for f in $LISTENER_FILE_NAMES; do
 		verify_written "$LISTENER_DIR/$f" "integrations/listener/$f" || return 1
 	done
-	printf '{\n  "mcpUrl": "%s"\n}\n' "$MCP_URL" >"$LISTENER_DIR/config.json"
+	listener_config_write || return 1
 	# agent-homes AGH28: the listener names this slug on its polls until it has made the agent's home.
 	if [ -n "$agent_slug" ]; then
 		grep -qx "$agent_slug" "$LISTENER_DIR/adopt" 2>/dev/null || printf '%s\n' "$agent_slug" >>"$LISTENER_DIR/adopt"
@@ -755,6 +798,13 @@ install_listener() {
 	mkdir -p "$LISTENER_BIN"
 	printf '#!/bin/sh\nexec node "%s/hiveboss-listen.mjs" "$@"\n' "$LISTENER_DIR" >"$LISTENER_BIN/hiveboss-listen"
 	chmod 755 "$LISTENER_BIN/hiveboss-listen"
+	# M4: every re-run ("Nothing" in the menu, a narrowing, the WSL and SSH-Mac fallbacks included) loads the new code:
+	# a listener already running here is restarted when its files changed. A first install has none running.
+	if [ -n "$files_before" ] && [ "$files_before" != "$(listener_files_sum)" ]; then
+		if node "$LISTENER_DIR/hiveboss-listen.mjs" restart </dev/null; then :; else
+			say "Note: the listener runs the old version until it restarts. Restart it with: hiveboss-listen restart"
+		fi
+	fi
 	if [ "$login" = "setup" ]; then
 		say "The listener is installed$(checksum_note). hiveboss setup signs it in and starts it."
 		detail "    in $LISTENER_DIR, connecting to $MCP_URL"
@@ -767,6 +817,32 @@ install_listener() {
 		*":$LISTENER_BIN:"*) ;;
 		*) [ -n "${setup_later:-}" ] || say "Note: $LISTENER_BIN is not on your PATH; add it, or run $LISTENER_BIN/hiveboss-listen." ;;
 	esac
+}
+
+# listener_files_sum: one checksum line per listener file on disk (cksum, which every POSIX system has), or nothing
+# when none is there yet. M4 compares it before and after the files are written.
+listener_files_sum() {
+	for f in $LISTENER_FILE_NAMES; do
+		[ ! -f "$LISTENER_DIR/$f" ] || printf '%s %s\n' "$f" "$(cksum <"$LISTENER_DIR/$f")"
+	done
+}
+
+# listener_config_write (M6, connect lifecycle review 2026-11-02): sets mcpUrl in the listener's config.json and keeps
+# every other setting there (power: the owner's Claude API key or the plan; the URL each tool signed in at). A re-run
+# used to overwrite the file with mcpUrl only, so a Bee powered by an API key silently switched to the plan. A file
+# that is not a JSON object is replaced.
+listener_config_write() {
+	node -e '
+		const fs = require("fs");
+		const [file, url] = process.argv.slice(1);
+		let config = {};
+		try { config = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
+		if (!config || typeof config !== "object" || Array.isArray(config)) config = {};
+		config.mcpUrl = url;
+		const tmp = file + "." + process.pid + ".tmp";
+		fs.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
+		fs.renameSync(tmp, file);
+	' "$LISTENER_DIR/config.json" "$MCP_URL"
 }
 
 # The agent knowledge tools: their files from the block below, into $KNOWLEDGE_DIR. Claude Code reaches them
@@ -909,6 +985,19 @@ context_plugin_state() {
 		}
 	}
 	END { if (on) print "enabled"; else if (seen) print "disabled"; else print "absent" }'
+}
+
+# claude_marketplace_old NAME: true when Claude Code's marketplace NAME is the old private source $OLD_MARKETPLACE
+# (as owner/repo, or a GitHub git URL of it). Reads the JSON list only; a list it cannot read is never "old".
+claude_marketplace_old() {
+	list=$(claude plugin marketplace list --json </dev/null 2>/dev/null) || return 1
+	printf '%s' "$list" | tr -d '\n\r\t ' | tr '}' '\n' | awk -v name="$1" -v old="$OLD_MARKETPLACE" '
+		index($0, "\"name\":\"" name "\"") {
+			line = tolower($0)
+			o = tolower(old)
+			if (index(line, "\"repo\":\"" o "\"") || index(line, "github.com/" o "\"") || index(line, "github.com/" o ".git\"") || index(line, "github.com:" o ".git\"")) found = 1
+		}
+		END { exit !found }'
 }
 
 # claude_marketplace_present NAME: true when Claude Code already has a plugin
@@ -1327,14 +1416,22 @@ export const SIGN_IN_AGAIN = "Sign in again: hiveboss-listen login";
 // bees-connect LINK-10 (review 2026-10-25): with the Bees rules on, a sign-in refused while running means this computer
 // was disconnected (a Disconnect in HiveBoss, or its Bee moved away): the way back is `hiveboss connect`.
 export const DISCONNECTED_AGAIN = "This computer was disconnected. Run hiveboss connect to connect it again.";
+// M1 (connect lifecycle review 2026-11-02): HiveBoss refused the listener's sign-in for good. The listener cleans up
+// this computer (its service, its sign-ins, the Claude API key, its agent files) and stops; the Bee's folder stays.
+export const DISCONNECTED_IN_HIVEBOSS = "This computer was disconnected in HiveBoss. Run the install command again to reconnect.";
 // Each harness's adapter: BIN, KNOWN_MAJORS (absent for a custom command), SIGN_IN_ENV and launch().
 export const ADAPTERS = { "claude-code": claudeCode, codex, opencode, command };
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 export class ConfigError extends Error {}
 export class SignInError extends Error {
-	constructor() {
+	/**
+	 * `refused` (connect lifecycle review 2026-11-02, M1): HiveBoss answered that this sign-in is no longer valid
+	 * (invalid_grant or invalid_client: a Disconnect in HiveBoss revoked it). Without it the sign-in is only missing.
+	 */
+	constructor({ refused = false } = {}) {
 		super(SIGN_IN_AGAIN);
+		this.refused = refused;
 	}
 }
 export class HttpError extends Error {
@@ -1671,7 +1768,16 @@ export function createClient({ home, mcpUrl, fetchImpl = fetch }) {
 		return machineId ? { [MACHINE_ID_HEADER]: machineId } : {};
 	};
 
-	async function refresh() {
+	// M3 (connect lifecycle review 2026-11-02): one refresh at a time. The refresh token rotates on every use, so two
+	// refreshes at once (a report flush and a poll just after the computer wakes) sent the same token twice, and
+	// HiveBoss revokes a device whose refresh token comes back. A second caller joins the refresh in flight.
+	let refreshing = null;
+	function refresh() {
+		refreshing ??= refreshOnce().finally(() => (refreshing = null));
+		return refreshing;
+	}
+
+	async function refreshOnce() {
 		if (!existsSync(credFile)) throw new SignInError();
 		const cred = readJson(credFile);
 		let res;
@@ -1685,7 +1791,7 @@ export function createClient({ home, mcpUrl, fetchImpl = fetch }) {
 			throw new HttpError(0, undefined, { tool: "sign-in refresh" });
 		}
 		if (res.status >= 500 || res.status === 429) throw new HttpError(res.status, retryAfter(res), { tool: "sign-in refresh", body: await bodyStart(res) });
-		if (!res.ok) throw new SignInError();
+		if (!res.ok) throw new SignInError({ refused: await grantRefused(res) });
 		const body = await res.json();
 		// The refresh token rotates on every use: the new one is saved before the old is forgotten.
 		writePrivate(credFile, { ...cred, refreshToken: body.refresh_token });
@@ -1709,9 +1815,11 @@ export function createClient({ home, mcpUrl, fetchImpl = fetch }) {
 	return {
 		async call(name, args = {}) {
 			if (!access || access.until < Date.now()) await refresh();
+			const used = access;
 			let res = await post(name, args);
 			if (res.status === 401) {
-				await refresh();
+				// A call that ran at the same time may already have refreshed: its token is used, not a second refresh.
+				if (access === used) await refresh();
 				res = await post(name, args);
 				if (res.status === 401) throw new SignInError();
 			}
@@ -1725,6 +1833,17 @@ export function createClient({ home, mcpUrl, fetchImpl = fetch }) {
 			return parseToolReply(text, res.headers.get("content-type") ?? "");
 		},
 	};
+}
+
+/** M1: a token endpoint's 400 or 401 that names invalid_grant or invalid_client: HiveBoss refused this sign-in for good. */
+export async function grantRefused(res) {
+	if (res.status !== 400 && res.status !== 401) return false;
+	try {
+		const body = await res.json();
+		return body?.error === "invalid_grant" || body?.error === "invalid_client";
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -4018,6 +4137,8 @@ export async function runForever(ctx, { sleep = (ms) => new Promise((r) => setTi
 			ctx.reloadAgents?.();
 			outcome = { ok: true, ...(await tick(ctx)) };
 		} catch (error) {
+			// M1: a refused sign-in cleans this computer up and exits 0, which no service manager restarts.
+			if (error instanceof SignInError && error.refused) return await (ctx.disconnected ?? disconnectedHere)(ctx);
 			if (error instanceof SignInError) return (ctx.log(ctx.bees === true ? DISCONNECTED_AGAIN : SIGN_IN_AGAIN), 3);
 			if (error instanceof ConfigError) return (ctx.log(error.message), 2);
 			// AGH26: a 5xx backs off like a 429 (15 s doubling to 60 s); a dropped connection from 1 s.
@@ -4318,6 +4439,139 @@ export function service(action, home, log, { platform = process.platform, userHo
 	return 2;
 }
 
+/** M4: the listener as a background process with its output in its log (no service manager to run it). */
+function startDetachedListener(script, logFile) {
+	try {
+		const fd = openSync(logFile, "a", 0o600);
+		const child = spawn(process.execPath, [script, "run"], { detached: true, stdio: ["ignore", fd, fd], ...WINDOWS_HIDE });
+		child.unref();
+		closeSync(fd);
+		return Boolean(child.pid);
+	} catch {
+		return false;
+	}
+}
+
+/** How long `restart` waits for the running listener to stop (it stops its runs and sends its reports first). */
+export const RESTART_WAIT_MS = 30_000;
+
+/**
+ * M4 (connect lifecycle review 2026-11-02): `hiveboss-listen restart`, run by the installer when it wrote listener
+ * files that differ from the ones on disk. A re-run used to leave the old code running until setup changed an agent
+ * ("Nothing", a narrowing, the WSL and SSH-Mac fallbacks). The running listener (listener.pid) is stopped (SIGTERM:
+ * it stops its runs and exits 0, which no service manager restarts; on Windows its process tree is ended), then
+ * started again from the new files: by its service when one is installed, else as a background process, as setup
+ * started it. Nothing runs: nothing is started (0). Returns 1 when it could not be started again.
+ */
+export function restartListener(home, { platform = process.platform, userHome = homedir(), uid = process.getuid?.(), run = spawnSync, start = startService, alive = pidAlive, isListener = listenerPid, kill = (pid) => process.kill(pid, "SIGTERM"), startDetached = startDetachedListener, sleepMs = pause, waitMs = RESTART_WAIT_MS, script = fileURLToPath(import.meta.url), log = () => {} } = {}) {
+	let pid = 0;
+	try {
+		pid = Number(readFileSync(join(home, "listener.pid"), "utf8").trim());
+	} catch {}
+	if (!(Number.isInteger(pid) && pid > 0 && pid !== process.pid && alive(pid) && isListener(pid))) return (log("No listener is running here, so there is nothing to restart."), 0);
+	if (platform === "win32") stopWindowsListener(home, run);
+	else {
+		try {
+			kill(pid);
+		} catch {}
+	}
+	for (let waited = 0; waited < waitMs && alive(pid); waited += 200) sleepMs(200);
+	if (alive(pid)) return (log(`The listener (pid ${pid}) did not stop, so it still runs the old files. Restart this computer, or stop it and run: hiveboss-listen run`), 1);
+	const logFile = join(home, "listener.log");
+	const { file } = serviceFile({ platform, home: userHome, logFile, script });
+	if (existsSync(file) && start({ platform, uid, file, run })) return (log("The listener was restarted with the new files."), 0);
+	if (startDetached(script, logFile)) return (log("The listener was restarted with the new files, in the background."), 0);
+	log("The listener stopped but could not start again. Start it with: hiveboss-listen run");
+	return 1;
+}
+
+/**
+ * M1 (connect lifecycle review 2026-11-02): the listener's own service is taken out while it is still running, so
+ * nothing starts it again: the LaunchAgent's plist (and the @reboot crontab line), the systemd unit (disabled, not
+ * stopped: stopping it would end this very process), the Windows task and its launcher. The process then exits 0,
+ * which launchd's KeepAlive {SuccessfulExit: false}, systemd's Restart=on-failure and the Windows launcher never
+ * restart. Every step is tried; a failing one does not stop the others.
+ */
+export function removeOwnService(home, { platform = process.platform, userHome = homedir(), run = spawnSync, script = fileURLToPath(import.meta.url) } = {}) {
+	const { file } = serviceFile({ platform, home: userHome, logFile: join(home, "listener.log"), script });
+	const quiet = { stdio: "ignore", ...WINDOWS_HIDE };
+	try {
+		if (platform === "win32") run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_TASK_REMOVE], quiet);
+		else if (platform !== "darwin") run("systemctl", ["--user", "disable", "hiveboss-listener.service"], quiet);
+	} catch {}
+	try {
+		rmSync(file, { force: true });
+	} catch {}
+	if (platform === "linux") {
+		try {
+			run("systemctl", ["--user", "daemon-reload"], quiet);
+		} catch {}
+	}
+	if (platform === "darwin") {
+		try {
+			rebootCron("remove", { run });
+		} catch {}
+	}
+	return file;
+}
+
+/** M1: the Claude API key `hiveboss connect` kept in the OS keychain (service hiveboss-cli), and the CLI's refresh token kept there. */
+export function forgetKeychain(accounts, { platform = process.platform, run = spawnSync } = {}) {
+	for (const account of accounts) {
+		const args = platform === "darwin" ? ["security", ["delete-generic-" + "password", "-s", "hiveboss-cli", "-a", account]] : platform === "linux" ? ["secret-tool", ["clear", "service", "hiveboss-cli", "account", account]] : null;
+		if (!args) return;
+		try {
+			run(args[0], args[1], { stdio: "ignore", timeout: 10_000 });
+		} catch {}
+	}
+}
+
+/**
+ * M1 (connect lifecycle review 2026-11-02): HiveBoss refused this listener's sign-in for good (a Disconnect in
+ * HiveBoss revoked every grant of this computer). What `hiveboss disconnect` does locally, done here too: the runs in
+ * progress stop, the service goes, both sign-ins (listener and CLI) and the Claude API key go, and the agent files
+ * (the listener's agents folder and the CLI's agents.json) are moved aside, so the installer starts fresh. The Bee's
+ * own folder is never touched; the log line says where it is. Returns 0: no service manager restarts an exit 0.
+ */
+export async function disconnectedHere(ctx, { env = process.env, platform = process.platform, userHome = homedir(), run = spawnSync, script = fileURLToPath(import.meta.url), now = new Date() } = {}) {
+	const home = ctx.home;
+	for (const h of ctx.running?.values?.() ?? []) h.stop();
+	await Promise.allSettled([...(ctx.running?.values?.() ?? [])].map((h) => h.done));
+	const folders = new Set();
+	for (const cfg of ctx.agents?.values?.() ?? []) {
+		try {
+			const folder = agentHomeOf(cfg, env) ?? (typeof cfg.cwd === "string" ? cfg.cwd : null);
+			if (folder) folders.add(folder);
+		} catch {}
+	}
+	removeOwnService(home, { platform, userHome, run, script });
+	const cli = env.HIVEBOSS_CLI_HOME || join(userHome, ".hiveboss", "cli");
+	const accounts = ["claude-api-key"];
+	try {
+		const saved = JSON.parse(readFileSync(join(cli, "credential.json"), "utf8"));
+		if (saved?.store === "keychain" && typeof saved.mcpUrl === "string") accounts.push(saved.mcpUrl);
+	} catch {}
+	forgetKeychain(accounts, { platform, run });
+	for (const file of [join(home, "credential.json"), join(cli, "credential.json")]) {
+		try {
+			rmSync(file, { force: true });
+		} catch {}
+	}
+	const stamp = now.toISOString().replace(/[:.]/g, "-");
+	for (const [from, to] of [
+		[join(home, "agents"), join(home, `agents.disconnected-${stamp}`)],
+		[join(cli, "agents.json"), join(cli, `agents.disconnected-${stamp}.json`)],
+	]) {
+		try {
+			if (existsSync(from)) renameSync(from, to);
+		} catch {}
+	}
+	const where = [...folders];
+	ctx.log(`${DISCONNECTED_IN_HIVEBOSS}${where.length ? ` The Bee's folder stays on this computer: ${where.join(", ")}` : ""}`);
+	ctx.stopped = true;
+	return 0;
+}
+
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 /** The agents folder's files and their times, to notice an agent added while running. */
@@ -4443,13 +4697,14 @@ export function listLine(cfg, a, bindableName) {
 	return `${name ?? `(an agent HiveBoss no longer has, ${cfg.personaId})`}  ${cfg.harness}  ${cfg.cwd}  ${state}${a?.ceiling ? `  ceiling ${a.ceiling}` : ""}`;
 }
 
-export const HELP = `Usage: hiveboss-listen login | add | list | run | service install|remove | prune
+export const HELP = `Usage: hiveboss-listen login | add | list | run | restart | service install|remove | prune
 
   login [--no-browser]     sign in as this machine's listener device
   add [--persona <id>] [--session <id> | --binding <id>] [--cwd <dir>] [--name <slug>]
                            write agents/<slug>.json: the agent and the session to wake
   list                     each agent's config with HiveBoss's view of it
   run                      listen in the foreground
+  restart                  stop the running listener and start it again from its files
   service install|remove   run it as a launchd (macOS) or systemd user service
   prune [--force]          remove worktrees left by Work runs: one with edits not
                            committed only with --force; a branch only when it has
@@ -4500,6 +4755,8 @@ async function main(argv) {
 	// The other commands talk to a person at a terminal and print as before.
 	const log = command === "run" ? timestampedLog() : (line) => console.log(line);
 	const f = flags(rest);
+	// M4: before the config check, so a restart never depends on a sign-in or a config.
+	if (command === "restart") return restartListener(home, { log });
 	if (!["login", "add", "list", "run", "service", "prune"].includes(command)) {
 		log(HELP);
 		return command === undefined || command === "help" || command === "--help" ? 0 : 2;
@@ -6274,6 +6531,10 @@ export const SIGN_IN_ENV = ["OPENAI_API_KEY", "CODEX_HOME"];
 // from apps or plugins, run hooks, or start other agents: all off below
 // Trusted. Every name is one `codex features list` prints on 0.153.2; an
 // unknown name makes Codex refuse to start, which fails closed.
+// code_mode_host stays on (2026-11-02): models whose tool mode is code-mode only
+// (gpt-6.1-sol) reach every tool, MCP included, through it, and with it off they
+// see no tool at all. It runs the model's code in an isolate that can call only
+// the tools left on: no files, network or processes of its own.
 export const FEATURES_OFF = [
 	"shell_tool",
 	"unified_exec",
@@ -6287,7 +6548,6 @@ export const FEATURES_OFF = [
 	"browser_use_full_cdp_access",
 	"in_app_browser",
 	"computer_use",
-	"code_mode_host",
 	"image_generation",
 	"multi_agent",
 	"apps",
@@ -6324,6 +6584,13 @@ export function wakeTokenConfig({ mcpUrl, server = HIVEBOSS_SERVER }) {
 const required = (server) => [`mcp_servers.${server}.required`, "true"];
 
 /**
+ * 2026-11-02: approval_policy "never" refuses every MCP call that would need approval, which is all of them, so the
+ * run could not call HiveBoss. Approval is given for the HiveBoss server's tools only (and the knowledge server's,
+ * which is the agent's own); no other server is in an Answer run.
+ */
+const approved = (server) => [`mcp_servers.${server}.default_tools_approval_mode`, toml("approve")];
+
+/**
  * agent-homes AGH33, AGH35: the knowledge server as -c pairs. Also passed at Trusted, where the person's own
  * config.toml is read, so its entry always carries who started the wake.
  */
@@ -6341,7 +6608,8 @@ export function knowledgeConfig(knowledge) {
 export function codexConfig({ mcpUrl, wakeToken, knowledge }) {
 	return [
 		...knowledgeConfig(knowledge),
-		...(wakeToken ? [...wakeTokenConfig({ mcpUrl, server: WAKE_SERVER }), required(WAKE_SERVER)] : [[`mcp_servers.${HIVEBOSS_SERVER}.url`, toml(mcpUrl)], required(HIVEBOSS_SERVER)]),
+		...(knowledge?.command ? [approved(KNOWLEDGE_SERVER)] : []),
+		...(wakeToken ? [...wakeTokenConfig({ mcpUrl, server: WAKE_SERVER }), required(WAKE_SERVER), approved(WAKE_SERVER)] : [[`mcp_servers.${HIVEBOSS_SERVER}.url`, toml(mcpUrl)], required(HIVEBOSS_SERVER), approved(HIVEBOSS_SERVER)]),
 		["sandbox_mode", toml("read-only")],
 		["approval_policy", toml("never")],
 		["web_search", toml("disabled")],
@@ -9629,20 +9897,20 @@ HIVEBOSS_KNOWLEDGE_EOF
 # embedded_sha256 SOURCE: the SHA-256 of SOURCE as this script writes it (verify_written checks it).
 embedded_sha256() {
 	case "$1" in
-		"integrations/listener/hiveboss-listen.mjs") echo e229be5b575d20f1071e980ec7c826c9a8908c9b1152bb10e5c5e1705597cc5d ;;
+		"integrations/listener/hiveboss-listen.mjs") echo b703a2f78827a419eff077ed32de664f6181a1543e09d0a538f0021f29be6a65 ;;
 		"integrations/listener/home.mjs") echo 1c7a56fbb0457431df344a148a16463b660e38ec2194bee3a55ed0d61255fff4 ;;
 		"integrations/listener/tools.mjs") echo 48bef4c23a3d8e51afa93d86d0eeb0e6f88f33ab4ec643fd59a07d7262e80e48 ;;
 		"integrations/listener/profiles.mjs") echo c4fe608570a498ae0097ed82af430e4f9f6dc69be50880cc8aeb05ee170d36d9 ;;
 		"integrations/listener/home-guard.mjs") echo 43566d3a3776733ec4318d2e9945e73c48909ca5928e9045d857961b3a5a1213 ;;
 		"integrations/listener/lanes.mjs") echo 4349640d035c78266d5e12c83e5c62bcddf718bc7c11e2abc6be664b83801655 ;;
 		"integrations/listener/adapters/claude-code.mjs") echo 46cb17a220fe3bbfe6a866d274f4f25e9401ab50e40779b5269fe322858983c3 ;;
-		"integrations/listener/adapters/codex.mjs") echo b4b543f02452f00befb87900367bb8705e60cd8015b8b652d4299194ab8e6731 ;;
+		"integrations/listener/adapters/codex.mjs") echo 0834112e2d4398bfccb0581b3ea275318b4d0682adce9aadd87cf1bcc0c1dccd ;;
 		"integrations/listener/adapters/opencode.mjs") echo 969d0bf78e6e3d93376a3be8ead850448ea76c7119f78ed47d44f204a41ccd64 ;;
 		"integrations/listener/adapters/command.mjs") echo 8c92bbc2e85868dfa08c87999cdee566c252a9adb1b3daf2f01d626c70bfab32 ;;
 		"integrations/claude-code/hiveboss/skills/setup/SKILL.md") echo 67561c68fc5369dc0a23c4e4b5841e226e248e99566f4ae6cc76b2f53f9af878 ;;
 		"integrations/agents/skills/hiveboss/SKILL.md") echo 04a53880caa79499f68013372b233b883586ce5b660b7085e7ea37e267402471 ;;
 		"integrations/opencode/commands/hiveboss.md") echo 2563e48a3049ec1fee8417007226cb2825f5c316228f3d462f1bd5c08c3bb90c ;;
-		"integrations/cli/hiveboss.mjs") echo ad8da7fb60cc58cce3b9a007fe96ea1331f72f3875b2606e863d8ada6a24cb6d ;;
+		"integrations/cli/hiveboss.mjs") echo 71ce6c769cfb3957a9dc523ab5a16046912384368e8134dc4aa508d172bf9b93 ;;
 		"integrations/knowledge/server.mjs") echo 54dc1df417952b8d4ab1ac29d1b7d97a1ac23fd0148c27f66b8b9436991f24a0 ;;
 		"integrations/knowledge/knowledge.mjs") echo 838d3ed183f7acdaa0fd810805635b1a9835620dffe6db87bdba25777b6df9ff ;;
 		"integrations/knowledge/secret-patterns.mjs") echo 0eb1094fb063d519290d0522dc7fbf49d34a37ef4daf7c250f11d7830f2c1c46 ;;
@@ -11159,7 +11427,7 @@ async function accessOrWhy(file, d) {
 	const saved = loadCredential(file, d.keychain);
 	if (!saved?.refreshToken || !saved.tokenEndpoint) return { why: "signin" };
 	const r = await postForm(d.fetchImpl, saved.tokenEndpoint, { grant_type: "refresh_token", refresh_token: saved.refreshToken, client_id: saved.clientId ?? CLI_CLIENT }).catch(() => ({ ok: false, status: 0, body: {} }));
-	if (!r.ok || !r.body.access_token) return { why: isTransient(r.status) ? "unreachable" : "signin" };
+	if (!r.ok || !r.body.access_token) return { why: isTransient(r.status) ? "unreachable" : "signin", status: r.status };
 	if (r.body.refresh_token) {
 		const { refreshToken: _old, store: _store, ...record } = saved;
 		saveCredential({ file, record, refreshToken: r.body.refresh_token, keychain: d.keychain });
@@ -11230,6 +11498,60 @@ export function forgetAgents(home, gone) {
 	const left = list.filter((x) => !ids.has(x.personaId));
 	if (left.length !== list.length) writePrivate(join(home, "agents.json"), left);
 	return left;
+}
+
+/** M2: said when setup finds the saved sign-in refused and starts fresh. */
+export const SIGNED_OUT_HERE = "  This computer was disconnected in HiveBoss, so it is set up again from the start.";
+
+/**
+ * M2 (connect lifecycle review 2026-11-02): true only when HiveBoss itself refused the saved sign-in. One refresh; HiveBoss not answering is never a reason to sign out (the menu shows as before).
+ */
+export async function signInRefusedHere(file, d) {
+	// A keychain that cannot be read now (locked over SSH) is not a refusal: only HiveBoss's own answer counts.
+	const saved = loadCredential(file, d.keychain);
+	if (!saved?.refreshToken || !saved.tokenEndpoint) return false;
+	const access = await accessOrWhy(file, d).catch(() => ({ why: "unreachable" }));
+	// The token endpoint's invalid_grant (400) or invalid_client (401); any other answer leaves things as they are.
+	return access.why === "signin" && (access.status === 400 || access.status === 401);
+}
+
+/**
+ * M2: a refused sign-in's leftovers: the saved sign-ins (the CLI's and the listener's) go, and the agents this computer
+ * listed (the CLI's agents.json, the listener's agents folder) are moved aside, never deleted. Agent folders stay.
+ */
+export function forgetRefusedSetup(home, lHome, now = new Date(), keychain = null) {
+	const stamp = now.toISOString().replace(/[:.]/g, "-");
+	const saved = (() => {
+		try {
+			return readJson(join(home, "credential.json"));
+		} catch {
+			return null;
+		}
+	})();
+	if (saved?.store === "keychain" && saved.mcpUrl) keychain?.delete?.(saved.mcpUrl);
+	for (const file of [join(home, "credential.json"), join(lHome, "credential.json")]) rmSync(file, { force: true });
+	for (const [from, to] of [
+		[join(home, "agents.json"), join(home, `agents.disconnected-${stamp}.json`)],
+		[join(lHome, "agents"), join(lHome, `agents.disconnected-${stamp}`)],
+	]) {
+		try {
+			if (existsSync(from)) renameSync(from, to);
+		} catch {}
+	}
+}
+
+/**
+ * M2 (connect lifecycle review 2026-11-02): `hiveboss check-sign-in`, run by the installer before it says "already set
+ * up". 0: the saved sign-in works (or HiveBoss did not answer: nothing is assumed); 1: none is saved; 3: HiveBoss
+ * refused it, and its leftovers were cleared (forgetRefusedSetup), so the installer runs the first-time setup.
+ */
+async function checkSignIn(d) {
+	const home = cliHome(d.env);
+	const file = join(home, "credential.json");
+	if (!existsSync(file)) return 1;
+	if (!(await signInRefusedHere(file, d))) return 0;
+	forgetRefusedSetup(home, listenerHome(d.env), new Date(), d.keychain);
+	return 3;
 }
 
 /** F2: the agents set up here, less the ones HiveBoss says it no longer has. Unchanged when HiveBoss cannot be asked. */
@@ -11333,6 +11655,11 @@ async function setup(flags, d, preset = null, agentSlug = null) {
 		} else if (preset) {
 			agents = await liveLocalAgents(home, mcpUrl, file, d);
 			mode = "change";
+		} else if (old && (await signInRefusedHere(file, d))) {
+			// M2 (connect lifecycle review 2026-11-02): HiveBoss refused the saved sign-in (a Disconnect on the web revoked
+			// it), so nothing set up here is live: the stale agents are moved aside and this is a first-time setup.
+			forgetRefusedSetup(home, lHome, new Date(), d.keychain);
+			d.log(SIGNED_OUT_HERE);
 		} else if (old) {
 			// Prestaging test fix 2026-10-19 (SAC10): a CLI sign-in alone is not "set up". A first run that signed in
 			// and stopped before an agent was made gets the first-time questions (and its tool sign-ins), not the menu.
@@ -11789,6 +12116,9 @@ export const CONNECT_TEXT = {
 	noBee: "This computer has no Bee. Run hiveboss connect to make one.",
 	// LINK-12 (review 2026-10-25): after the Bee moved to another computer.
 	noBeeNow: "This computer has no Bee now.",
+	// M1 (connect lifecycle review 2026-11-02): HiveBoss already refused this computer's sign-in (a Disconnect on the web).
+	cleanedUp: (bee) => `✓ ${bee} was already disconnected in HiveBoss. This computer is cleaned up.`,
+	cleanedUpCheck: "  If HiveBoss still shows it, disconnect it from its Bee card there.",
 };
 
 /** BCN25: the power words of the done block. */
@@ -12316,14 +12646,26 @@ async function disconnect(flags, d) {
 			d.log(CONNECT_TEXT.noBeeNow);
 			return 0;
 		}
-		d.log(access.why === "unreachable" ? CONNECT_TEXT.unreachable.trim() : "This computer's HiveBoss sign-in has ended. Disconnect it from its Bee card in HiveBoss.");
-		return 1;
+		if (access.why === "unreachable") return (d.log(CONNECT_TEXT.unreachable.trim()), 1);
+		// M1 (connect lifecycle review 2026-11-02): HiveBoss refused the sign-in (a Disconnect on the web revoked it), so
+		// there is nothing left to disconnect there: this computer is cleaned up as after a disconnect from here.
+		cleanUpHere({ s, d, home, lHome, bee, file });
+		d.log(CONNECT_TEXT.cleanedUp(bee.name));
+		d.log(CONNECT_TEXT.cleanedUpCheck);
+		return 0;
 	}
 	const r = await postJson(d.fetchImpl, `${new URL(mcpUrl).origin}/connector/disconnect`, access.token, {}).catch(() => ({ ok: false, status: 0, body: {} }));
 	if (!r.ok || r.body?.ok !== true) {
 		d.log(r.status === 0 ? CONNECT_TEXT.unreachable.trim() : `${r.body?.message ?? `Disconnect failed (HTTP ${r.status}).`}`);
 		return 1;
 	}
+	cleanUpHere({ s, d, home, lHome, bee, file });
+	d.log(CONNECT_TEXT.disconnected(r.body.bee?.name ?? bee.name));
+	return 0;
+}
+
+/** After a disconnect: the computer stops calling HiveBoss (the service, the engine's HiveBoss sign-in, the sign-ins and the key here go). */
+function cleanUpHere({ s, d, home, lHome, bee, file }) {
 	// The computer stops calling HiveBoss: the service goes, the engine's HiveBoss sign-in goes, the sign-ins here go.
 	const script = join(lHome, "hiveboss-listen.mjs");
 	if (existsSync(script)) s.run(process.execPath, [script, "service", "remove"], { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
@@ -12337,8 +12679,6 @@ async function disconnect(flags, d) {
 	writePrivate(join(home, "agents.json"), []);
 	// LINK-12 (review 2026-10-25): a disconnected computer keeps no Claude API key either (BCN12 kept it for this Bee).
 	d.keychain?.delete?.(KEY_ACCOUNT);
-	d.log(CONNECT_TEXT.disconnected(r.body.bee?.name ?? bee.name));
-	return 0;
 }
 
 // ── Change a Bee by talking (bees-change-by-talking 0.4.0) ──
@@ -12774,7 +13114,7 @@ export async function main(argv, deps = {}) {
 	const [command, ...given] = argv.length === 0 ? ["setup"] : argv;
 	// F1: `hiveboss setup --agent <slug>` (the installer's --agent on a computer already set up) sets up that agent.
 	const { rest, agentSlug } = agentFlag(given);
-	const known = { login: ["--paste", "--listener"], logout: ["--listener"], setup: ["--no-browser", "--check", "--claude", "--codex", "--opencode", "--verbose"], listen: ["on", "off"], connect: ["--no-browser", "--verbose", "--window", "--probe", "--codex", "--claude", "--advanced"], disconnect: [], talk: [] };
+	const known = { login: ["--paste", "--listener"], logout: ["--listener"], setup: ["--no-browser", "--check", "--claude", "--codex", "--opencode", "--verbose"], listen: ["on", "off"], connect: ["--no-browser", "--verbose", "--window", "--probe", "--codex", "--claude", "--advanced"], disconnect: [], talk: [], "check-sign-in": [] };
 	try {
 		if (command === "login" || command === "setup" || command === "connect") {
 			const refusal = codeRefusal(rest, d.env);
@@ -12797,6 +13137,7 @@ export async function main(argv, deps = {}) {
 		if (command === "setup") return await setup(new Set(rest), d, null, agentSlug);
 		if (command === "connect") return await connect(new Set(rest), d);
 		if (command === "disconnect") return await disconnect(new Set(rest), d);
+		if (command === "check-sign-in") return await checkSignIn(d);
 		if (command === "talk") return await talk(new Set(rest), d);
 		return await (command === "login" ? login : command === "listen" ? listen : logout)(new Set(rest), d);
 	} catch (error) {
